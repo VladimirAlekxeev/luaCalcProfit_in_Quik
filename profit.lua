@@ -3,10 +3,15 @@ package.path=package.path..";.\\?.lua;C:\\Program Files (x86)\\Lua\\5.1\\lua\\?.
 
 package.path=package.path..getScriptPath()..'\\?.lua;'
 
+require'QL'
+require'elementToStr'
 
-local deals = {total_profit = 0, total_number_of_deals = 0}	-- таблица сделок
+
+local deals = {total_profit = 0, number_of_all_deals = 0}	-- таблица сделок
 
 local message = function (str) message(str, 1) end
+local toLog = function(str) toLog(getScriptPath()..'\\log.txt', str) end
+local count = 0
 
 function dealToString(deal)
 	local str = ''
@@ -30,24 +35,28 @@ end
 
 function extractParam(transact)
 -- получает транзакцию из таблицы сделок
--- возвращает таблицу с параметрами транзакции
-	return {price=transact.price, qty=transact.qty, flags=transact.flags, sec_code = transact.sec_code, class_code = transact.class_code}
+-- возвращает таблицу с нужными параметрами транзакции
+	return {price=transact.price, qty=transact.qty, flags=transact.flags, sec_code=transact.sec_code, class_code=transact.class_code}
 end
 
 function setDeal(transact)
 -- получает транзакцию из таблицы сделок
 -- устанавливает начальные значения сделки
 -- возвращает таблицу my_deal
+
+	toLog('set transaction #'..count..' qty = '..transact.qty..', price = '..transact.price..' '..getTransacDirect(transact))
+	count = count + 1
+	
 	local my_deal = {transactions = {}}
 	my_deal.transactions[#my_deal.transactions + 1] = extractParam(transact)
 	my_deal.open = true
 	my_deal.avg_price = transact.price
 	my_deal.deal_direct = getTransacDirect(transact)
-	my_deal.profit = 0
 	return my_deal
 end
 
 function closeDeal(transact)
+	toLog('Close Deal')
 	local d = deals[transact.sec_code..' '..transact.class_code]
 	d.deal = {transactions = {}}
 	d.deal.open = false
@@ -75,43 +84,60 @@ end
 
 function calcDeal(transaction)
 -- В РАЗРАБОТКЕ
-	local d = deals[transaction.sec_code..' '..transaction.class_code]
+	local in_transact = extractParam(transaction)
+	local d = deals[in_transact.sec_code..' '..in_transact.class_code]
+	
+	toLog('calc transaction #'..count..' qty = '..in_transact.qty..', price = '..in_transact.price..' '..getTransacDirect(in_transact))
+	count = count + 1
+	
 	if d.deal.open == false then
-		d.deal = setDeal(transaction)
-		d.total_deals = d.total_deals + 1
-		deals.total_number_of_deals = deals.total_number_of_deals + 1
+		d.deal = setDeal(in_transact)	
+		d.number_of_deals = d.number_of_deals + 1
+		deals.number_of_all_deals = deals.number_of_all_deals + 1
 	else
-		if d.deal.deal_direct == getTransacDirect(transaction) then	-- если транзакция совпадает с напр. сделки.
-			addToDeal(transaction)
+		if d.deal.deal_direct == getTransacDirect(in_transact) then	-- если транзакция совпадает с напр. сделки.
+			addToDeal(in_transact)
 		else
 			-- qty, price - разница в кол-ве контрактов и цене между последней транзакцией в сделке
 			-- и транзакцией на закрытие сделки
 			local dif = {qty = 0, price = 0}
-			local tr = {}	-- последняя транзакция в сделке
-			local transaction_perormed = false	-- флаг полного исполнения транзакции
+			local last_deal_tr = {}	-- последняя транзакция в сделке
+			-- флаг полного исполнения транзакции противоположной направлению сделки
+			local transaction_perormed = false
 			while not transaction_perormed do
-				tr = table.remove(d.deal.transactions) 	--вытаскивает последнюю транзакцию из  deal				
+				last_deal_tr = table.remove(d.deal.transactions) 	--вытаскивает последнюю транзакцию из  deal				
 				if d.deal.deal_direct == 'b' then
-					dif.price = transaction.price - tr.price
+					dif.price = in_transact.price - last_deal_tr.price
 				else
-					dif.price = tr.price - transaction.price
+					dif.price = last_deal_tr.price - in_transact.price
 				end
-				dif.qty = tr.qty - transaction.qty
-				if dif.qty > 0 or dif.qty == 0 then
-					d.total_profit = d.total_profit + transaction.qty * dif.price
-					tr.qty = dif.qty
-					addToDeal(tr)
+				dif.qty = last_deal_tr.qty - in_transact.qty
+				local profit = 0
+				if dif.qty >= 0 then
+					toLog('dif.qty = '..dif.qty..', dif.price = '..dif.price)
+					profit = in_transact.qty * dif.price
+					last_deal_tr.qty = dif.qty
+					addToDeal(last_deal_tr)
 					transaction_perormed = true
 				else
-					d.total_profit = d.total_profit + tr.qty * dif.price
+					profit = last_deal_tr.qty * dif.price
+					in_transact.qty = -1 * dif.qty	-- неисполненый остаток контрактов во входящей транзакции
 				end
-				if #d.deal.transactions == 0 then
-					closeDeal(transaction)
+				d.total_profit = d.total_profit  + profit
+				deals.total_profit = deals.total_profit + profit
+				toLog('d.total_profit = '..d.total_profit..' deals.total_profit = '..deals.total_profit)
+				if #d.deal.transactions == 0 then	-- если больше нет транзакций в сделке
+					closeDeal(in_transact)
+					if in_transact.qty > 0 then		-- если остались не закрытые контракты во входящей транзакции
+						d = setDeal(in_transact)	-- открывается сделка в противоположном направлении
+					end
 					transaction_perormed = true
 				end
+				toLog('-----------------------------------------------------------------------------')
 			end
 		end
 	end
+	toLog('******************************************************************************************')
 end
 
 function main()
@@ -124,13 +150,9 @@ function main()
 		else
 			deals[trade.sec_code..' '..trade.class_code] = {}
 			deals[trade.sec_code..' '..trade.class_code].deal= setDeal(trade)
-			deals[trade.sec_code..' '..trade.class_code].total_deals = 1	-- кол-во сделок по бумаге или фьючерсу
+			deals[trade.sec_code..' '..trade.class_code].number_of_deals = 1	-- кол-во сделок по бумаге или фьючерсу
 			deals[trade.sec_code..' '..trade.class_code].total_profit = 0 -- доход по бумаге или фьючерсу
-			deals.total_number_of_deals = deals.total_number_of_deals + 1
-		end
-		if deals[trade.sec_code..' '..trade.class_code].deal.open then
-			message(dealToString(deals[trade.sec_code..' '..trade.class_code].deal))
+			deals.number_of_all_deals = deals.number_of_all_deals + 1
 		end
 	end	
-	--message(dealToString(deals[trade.sec_code..' '..trade.class_code].deal))
 end
