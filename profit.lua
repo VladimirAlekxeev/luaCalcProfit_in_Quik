@@ -6,7 +6,7 @@ package.path=package.path..getScriptPath()..'\\?.lua;'
 require'QL'
 require'elementToStr'
 
-local deals = {total_profit = 0, number_of_all_deals = 0}	-- таблица сделок заполняется в функции setDeal()
+local deals = {total_profit = 0, number_of_all_deals = 0}	-- таблица сделок заполняется в функции openDeal()
 
 local count = 0
 local run = true
@@ -48,23 +48,35 @@ function extractParam(transact)
 			class_code=transact.class_code, order_num = transact.order_num}
 end
 
-function setDeal(transact)
--- получает транзакцию 
--- устанавливает начальные значения сделки
--- возвращает таблицу my_deal
+function openDeal(transact, first)
+-- получает транзакцию и first -- флаг открытия первой сделки
+-- если first true -- устанавливает начальные значения сделки
+-- если nil -- увеличивает счётчики, устанавливвает значения из transact
 
 	toLog('set transaction #'..count..' qty = '..transact.qty..', price = '..transact.price..' '..getTransacDirect(transact))
 	count = count + 1
-	
-	local my_deal = {transactions = {}}
-	my_deal.transactions[#my_deal.transactions + 1] = transact
-	my_deal.open = true
-	my_deal.avg_price = transact.price
-	my_deal.deal_direct = getTransacDirect(transact)
-	my_deal.sum_contracts = transact.qty
-	my_deal.sec_code = transact.sec_code
-	my_deal.class_code = transact.class_code
-	return my_deal
+	local op_d = first or false
+	local d = {}
+	if op_d then
+		deals[transact.sec_code..' '..transact.class_code] = {}
+		d = deals[transact.sec_code..' '..transact.class_code]
+		d.deal = {transactions = {}}
+		d.number_of_deals = 1	-- кол-во сделок по бумаге или фьючерсу
+		d.total_profit = 0 -- общий доход по бумаге или фьючерсу
+		d.total_qty = transact.qty	-- общее кол-во контрактов в сделках по бумаге или фъючерсу
+	else
+		d = deals[transact.sec_code..' '..transact.class_code]
+		d.number_of_deals = d.number_of_deals + 1
+		d.total_qty = d.total_qty + transact.qty
+	end
+	d.deal.open = true
+	d.deal.transactions[#d.deal.transactions + 1] = transact
+	d.deal.avg_price = transact.price
+	d.deal.deal_direct = getTransacDirect(transact)
+	d.deal.sum_contracts = transact.qty
+	d.deal.sec_code = transact.sec_code
+	d.deal.class_code = transact.class_code
+	deals.number_of_all_deals = deals.number_of_all_deals + 1
 end
 
 function closeDeal(transact)
@@ -127,24 +139,15 @@ function calcDeal(transaction)
 -- Создаёт в таблице deals, если ещё не существует, ключ 'sec_code cass_code'
 -- присваивает ему значение таблицу deal в которой заполняе поля.
 	local in_transact = extractParam(transaction)
-	local d = deals[in_transact.sec_code..' '..in_transact.class_code] or {}	
 	
 	if deals[in_transact.sec_code..' '..in_transact.class_code] == nil then
-		deals[in_transact.sec_code..' '..in_transact.class_code] = {}
-		d = deals[in_transact.sec_code..' '..in_transact.class_code]
 		toLog('Deal is opening first time.')
-		d.deal= setDeal(in_transact)
-		d.number_of_deals = 1	-- кол-во сделок по бумаге или фьючерсу
-		d.total_profit = 0 -- общий доход по бумаге или фьючерсу
-		d.total_qty = in_transact.qty	-- общее кол-во контрактов в сделках по бумаге или фъючерсу
-		deals.number_of_all_deals = deals.number_of_all_deals + 1
+		openDeal(in_transact, true)
 	else
+		local d = deals[in_transact.sec_code..' '..in_transact.class_code]	
 		if d.deal.open == false then
 			toLog('Deal is opening')
-			d.deal = setDeal(in_transact)	
-			d.number_of_deals = d.number_of_deals + 1
-			d.total_qty = d.total_qty + in_transact.qty
-			deals.number_of_all_deals = deals.number_of_all_deals + 1
+			openDeal(in_transact)
 		else
 			if d.deal.deal_direct == getTransacDirect(in_transact) then	-- если транзакция совпадает с напр. сделки.
 				toLog('transation adding to deal')
@@ -184,15 +187,14 @@ function calcDeal(transaction)
 						toLog('******************************************************************************************')
 						if dif.qty < 0 then		-- если остались не закрытые контракты во входящей транзакции
 							toLog('Opening new revers deal')
-							d = setDeal(in_transact)	-- открывается сделка в противоположном направлении
+							d = openDeal(in_transact)	-- открывается сделка в противоположном направлении
 						end
 						transaction_perormed = true
 					end
 				end
 			end
 		end		
-	end
-	
+	end	
 end
 
 function OnInit()
@@ -273,7 +275,6 @@ end
 function main()
 	local number_of_items = getNumberOf('trades')
 	local start_item, n = 0, 0
-	-- toLog('table "trades" cheked')
 	
 	-- toLog('Price of pricestep  '..getParamEx("SPBFUT", "SRZ5", "STEPPRICE").param_value)
 	-- toLog('pricestep  '..getParamEx("SPBFUT", "SRZ5", "SEC_PRICE_STEP").param_value)
@@ -284,7 +285,7 @@ function main()
 			calcDeal(getItem('trades', i))		
 			n = i			
 		end
-		if n ~= 0 then start_item = n + 1 end	--если хотябы одна итерация цикла прошла
+		if number_of_items > 0 then start_item = n + 1 end	--если хотябы одна итерация цикла прошла
 		number_of_items = getNumberOf('trades')
 		viewResult(indicator())
 		sleep(100)
